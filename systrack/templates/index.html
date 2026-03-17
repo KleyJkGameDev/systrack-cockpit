@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SysTrack — Monitor de Servidor</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>" />
+</head>
+<body>
+
+<!-- Overlay da sidebar (mobile) -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+<!-- Modal de confirmação -->
+<div class="modal-overlay" id="killModal">
+  <div class="modal">
+    <div class="modal-title">⚠️ Encerrar Processo</div>
+    <div class="modal-body" id="killModalBody">Deseja realmente encerrar este processo?</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-danger" id="confirmKillBtn">Encerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Layout Principal -->
+<div class="app-layout">
+
+  <!-- ─── Sidebar ─────────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">🖥️</div>
+      <div>
+        <div class="logo-text">SysTrack</div>
+        <span class="logo-sub">Monitor de Servidor</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-title">Principal</div>
+      <a class="nav-item active" data-section="dashboard" onclick="navigate('dashboard', this)">
+        <span class="nav-icon">📊</span> Dashboard
+      </a>
+      <a class="nav-item" data-section="cpu" onclick="navigate('cpu', this)">
+        <span class="nav-icon">⚙️</span> CPU
+      </a>
+      <a class="nav-item" data-section="memory" onclick="navigate('memory', this)">
+        <span class="nav-icon">🧠</span> Memória
+      </a>
+      <a class="nav-item" data-section="disk" onclick="navigate('disk', this)">
+        <span class="nav-icon">💾</span> Disco
+      </a>
+      <a class="nav-item" data-section="network" onclick="navigate('network', this)">
+        <span class="nav-icon">🌐</span> Rede
+      </a>
+
+      <div class="nav-section-title" style="margin-top:8px;">Gerenciamento</div>
+      <a class="nav-item" data-section="processes" onclick="navigate('processes', this)">
+        <span class="nav-icon">📋</span> Processos
+      </a>
+      <a class="nav-item" data-section="services" onclick="navigate('services', this)">
+        <span class="nav-icon">🔧</span> Serviços
+      </a>
+      <a class="nav-item" data-section="logs" onclick="navigate('logs', this)">
+        <span class="nav-icon">📜</span> Logs
+      </a>
+
+      <div class="nav-section-title" style="margin-top:8px;">Sistema</div>
+      <a class="nav-item" data-section="sysinfo" onclick="navigate('sysinfo', this)">
+        <span class="nav-icon">ℹ️</span> Informações
+      </a>
+      <a class="nav-item" data-section="alerts" onclick="navigate('alerts', this)">
+        <span class="nav-icon">🔔</span> Alertas
+        <span class="nav-badge" id="alertBadge" style="display:none">0</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="server-status">
+        <div class="status-dot" id="statusDot"></div>
+        <div>
+          <div id="sidebarHostname" style="color:rgba(255,255,255,0.7);font-size:0.75rem;font-weight:600;">Carregando...</div>
+          <div id="sidebarUptime" style="font-size:0.65rem;">uptime: --</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ─── Conteúdo Principal ──────────────────────────────── -->
+  <div class="main-content">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+        <div>
+          <div class="page-title" id="pageTitle">Dashboard</div>
+          <div class="page-subtitle" id="pageSubtitle">Visão geral do sistema</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="header-info">
+          <span>🕐</span>
+          <span id="headerTime">--:--:--</span>
+        </div>
+        <div class="connection-indicator">
+          <div class="connection-dot" id="connDot"></div>
+          <span id="connStatus">Conectando...</span>
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()">
+          <span class="theme-icon" id="themeIcon">🌙</span>
+          <span id="themeLabel">Escuro</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Área de Conteúdo -->
+    <div class="content-area">
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: DASHBOARD
+      ════════════════════════════════════════════════════ -->
+      <section class="section active" id="section-dashboard">
+
+        <!-- Alertas -->
+        <div class="alerts-container" id="dashAlerts"></div>
+
+        <!-- Métricas Principais -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-icon-wrap blue">⚙️</div>
+            <div class="metric-info">
+              <div class="metric-label">CPU</div>
+              <div class="metric-value" id="dash-cpu-val">--%</div>
+              <div class="metric-sub" id="dash-cpu-sub">-- núcleos</div>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon-wrap green">🧠</div>
+            <div class="metric-info">
+              <div class="metric-label">Memória RAM</div>
+              <div class="metric-value" id="dash-mem-val">--%</div>
+              <div class="metric-sub" id="dash-mem-sub">-- / -- GB</div>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon-wrap yellow">💾</div>
+            <div class="metric-info">
+              <div class="metric-label">Disco Principal</div>
+              <div class="metric-value" id="dash-disk-val">--%</div>
+              <div class="metric-sub" id="dash-disk-sub">-- / -- GB</div>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon-wrap cyan">🌐</div>
+            <div class="metric-info">
+              <div class="metric-label">Rede ↓</div>
+              <div class="metric-value" id="dash-net-recv">-- KB/s</div>
+              <div class="metric-sub" id="dash-net-sent">↑ -- KB/s</div>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon-wrap purple">📋</div>
+            <div class="metric-info">
+              <div class="metric-label">Processos</div>
+              <div class="metric-value" id="dash-procs">--</div>
+              <div class="metric-sub">em execução</div>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon-wrap red">⏱️</div>
+            <div class="metric-info">
+              <div class="metric-label">Uptime</div>
+              <div class="metric-value" id="dash-uptime" style="font-size:1.1rem;">--</div>
+              <div class="metric-sub" id="dash-boot">boot: --</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gráficos em Tempo Real -->
+        <div class="charts-grid">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title"><span class="card-icon">⚙️</span> CPU — Histórico</div>
+                <div class="card-subtitle">Últimos 60 segundos</div>
+              </div>
+              <div class="metric-value" id="chart-cpu-val" style="font-size:1.2rem;">--%</div>
+            </div>
+            <div class="chart-container">
+              <canvas id="cpuChart"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title"><span class="card-icon">🧠</span> Memória — Histórico</div>
+                <div class="card-subtitle">Últimos 60 segundos</div>
+              </div>
+              <div class="metric-value" id="chart-mem-val" style="font-size:1.2rem;">--%</div>
+            </div>
+            <div class="chart-container">
+              <canvas id="memChart"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title"><span class="card-icon">🌐</span> Rede — Histórico</div>
+                <div class="card-subtitle">KB/s em tempo real</div>
+              </div>
+            </div>
+            <div class="chart-container">
+              <canvas id="netChart"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title"><span class="card-icon">📊</span> Carga do Sistema</div>
+                <div class="card-subtitle">Load average 1/5/15 min</div>
+              </div>
+            </div>
+            <div class="chart-container">
+              <canvas id="loadChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: CPU
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-cpu">
+        <div class="charts-grid mb-6">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span class="card-icon">⚙️</span> Uso Total de CPU</div>
+            </div>
+            <div class="gauge-container">
+              <div class="metric-value" id="cpu-total-val" style="font-size:3rem;">--%</div>
+              <div class="gauge-label">Utilização</div>
+            </div>
+            <div class="progress-bar-wrap" style="margin-top:16px;">
+              <div class="progress-bar">
+                <div class="progress-fill" id="cpu-total-bar" style="width:0%"></div>
+              </div>
+            </div>
+            <div class="chart-container" style="margin-top:16px;">
+              <canvas id="cpuDetailChart"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span class="card-icon">📊</span> Informações da CPU</div>
+            </div>
+            <div id="cpu-info-list"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">🔲</span> Uso por Núcleo</div>
+          </div>
+          <div class="cpu-cores-grid" id="cpu-cores-grid"></div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: MEMÓRIA
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-memory">
+        <div class="charts-grid mb-6">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span class="card-icon">🧠</span> Memória RAM</div>
+            </div>
+            <div class="gauge-container">
+              <div class="metric-value" id="mem-percent-val" style="font-size:3rem;">--%</div>
+              <div class="gauge-label" id="mem-used-label">-- GB usados de -- GB</div>
+            </div>
+            <div class="progress-bar-wrap" style="margin-top:16px;">
+              <div class="progress-bar" style="height:10px;">
+                <div class="progress-fill" id="mem-bar" style="width:0%"></div>
+              </div>
+            </div>
+            <div class="chart-container" style="margin-top:16px;">
+              <canvas id="memDetailChart"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span class="card-icon">🔄</span> Swap</div>
+            </div>
+            <div class="gauge-container">
+              <div class="metric-value" id="swap-percent-val" style="font-size:3rem;">--%</div>
+              <div class="gauge-label" id="swap-used-label">-- GB usados de -- GB</div>
+            </div>
+            <div class="progress-bar-wrap" style="margin-top:16px;">
+              <div class="progress-bar" style="height:10px;">
+                <div class="progress-fill yellow" id="swap-bar" style="width:0%"></div>
+              </div>
+            </div>
+            <div id="mem-details-list" style="margin-top:16px;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: DISCO
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-disk">
+        <div class="card mb-6">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">💾</span> Partições</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadDisk()">🔄 Atualizar</button>
+          </div>
+          <div class="disk-partitions" id="disk-partitions-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">📈</span> I/O de Disco</div>
+          </div>
+          <div id="disk-io-info"></div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: REDE
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-network">
+        <div class="metrics-grid mb-6">
+          <div class="metric-card">
+            <div class="metric-icon-wrap cyan">⬇️</div>
+            <div class="metric-info">
+              <div class="metric-label">Download</div>
+              <div class="metric-value" id="net-recv-speed">-- KB/s</div>
+              <div class="metric-sub" id="net-recv-total">Total: -- MB</div>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon-wrap blue">⬆️</div>
+            <div class="metric-info">
+              <div class="metric-label">Upload</div>
+              <div class="metric-value" id="net-sent-speed">-- KB/s</div>
+              <div class="metric-sub" id="net-sent-total">Total: -- MB</div>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon-wrap green">📦</div>
+            <div class="metric-info">
+              <div class="metric-label">Pacotes Recebidos</div>
+              <div class="metric-value" id="net-pkts-recv" style="font-size:1.1rem;">--</div>
+              <div class="metric-sub" id="net-pkts-sent">Enviados: --</div>
+            </div>
+          </div>
+        </div>
+        <div class="card mb-6">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">📊</span> Tráfego em Tempo Real</div>
+          </div>
+          <div class="chart-container" style="height:250px;">
+            <canvas id="netDetailChart"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">🔌</span> Interfaces de Rede</div>
+          </div>
+          <div class="iface-grid" id="iface-grid"></div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: PROCESSOS
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-processes">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">📋</span> Processos em Execução</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadProcesses()">🔄 Atualizar</button>
+          </div>
+          <div class="process-controls">
+            <input type="text" class="search-input" id="procSearch" placeholder="🔍 Filtrar por nome ou PID..." oninput="filterProcesses()" />
+            <button class="btn btn-ghost btn-sm" onclick="setSortProc('cpu')" id="sortCpuBtn">⚙️ CPU</button>
+            <button class="btn btn-ghost btn-sm" onclick="setSortProc('mem')" id="sortMemBtn">🧠 Memória</button>
+          </div>
+          <div class="table-wrapper">
+            <table id="procTable">
+              <thead>
+                <tr>
+                  <th>PID</th>
+                  <th>Nome</th>
+                  <th>Usuário</th>
+                  <th>Status</th>
+                  <th>CPU %</th>
+                  <th>MEM %</th>
+                  <th>Iniciado</th>
+                  <th>Ação</th>
+                </tr>
+              </thead>
+              <tbody id="procTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: SERVIÇOS
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-services">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">🔧</span> Serviços do Sistema</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadServices()">🔄 Atualizar</button>
+          </div>
+          <div class="services-grid" id="services-grid"></div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: LOGS
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-logs">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">📜</span> Logs do Sistema</div>
+            <div class="flex gap-2">
+              <select class="search-input" id="logLines" style="width:auto;" onchange="loadLogs()">
+                <option value="50">50 linhas</option>
+                <option value="100">100 linhas</option>
+                <option value="200">200 linhas</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" onclick="loadLogs()">🔄 Atualizar</button>
+            </div>
+          </div>
+          <div class="log-container" id="log-container">
+            <div class="text-muted text-sm">Carregando logs...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: INFORMAÇÕES DO SISTEMA
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-sysinfo">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">ℹ️</span> Informações do Sistema</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadSysInfo()">🔄 Atualizar</button>
+          </div>
+          <div class="info-grid" id="sysinfo-grid"></div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════
+           SEÇÃO: ALERTAS
+      ════════════════════════════════════════════════════ -->
+      <section class="section" id="section-alerts">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">🔔</span> Central de Alertas</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadAlerts()">🔄 Verificar</button>
+          </div>
+          <div id="alerts-list">
+            <div class="text-muted text-sm">Verificando alertas...</div>
+          </div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon">⚙️</span> Thresholds de Alerta</div>
+          </div>
+          <div id="threshold-info">
+            <div class="info-grid">
+              <div class="info-item">
+                <div class="info-key">CPU — Aviso</div>
+                <div class="info-val">Acima de 70%</div>
+              </div>
+              <div class="info-item">
+                <div class="info-key">CPU — Crítico</div>
+                <div class="info-val">Acima de 85%</div>
+              </div>
+              <div class="info-item">
+                <div class="info-key">Memória — Aviso</div>
+                <div class="info-val">Acima de 75%</div>
+              </div>
+              <div class="info-item">
+                <div class="info-key">Memória — Crítico</div>
+                <div class="info-val">Acima de 90%</div>
+              </div>
+              <div class="info-item">
+                <div class="info-key">Disco — Aviso</div>
+                <div class="info-val">Acima de 80%</div>
+              </div>
+              <div class="info-item">
+                <div class="info-key">Disco — Crítico</div>
+                <div class="info-val">Acima de 90%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div><!-- /content-area -->
+  </div><!-- /main-content -->
+</div><!-- /app-layout -->
+
+<script src="/static/js/chart.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
