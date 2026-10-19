@@ -1,5 +1,3 @@
-> Este projeto foi gerado pela IA Manus, em resposta a uma solicitação do usuário.
-
 # SysTrack — Sistema de Monitoramento de Servidores
 
 **SysTrack** é um sistema de monitoramento de servidores leve, moderno e totalmente autônomo, inspirado no [Cockpit Project](https://cockpit-project.org/). Ele foi projetado para ser executado de forma 100% offline e local, sem depender de APIs externas, cookies ou acesso à internet. O sistema oferece uma visão em tempo real da saúde e do desempenho do seu servidor Linux através de uma interface web limpa e responsiva.
