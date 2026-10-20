@@ -5,22 +5,46 @@ Totalmente offline e local, sem autenticação.
 """
 
 import json
+import os
+import sqlite3
 import time
 import platform
 import socket
 import subprocess
 from collections import deque
 from datetime import datetime, timedelta
-from threading import Lock
+from threading import Lock, Thread
 
 import psutil
 from flask import Flask, Response, jsonify, render_template, request
 
 app = Flask(__name__)
 
+# Autenticação básica HTTP (opcional, via variáveis de ambiente)
+import hmac
+from dotenv import load_dotenv
+load_dotenv("systrack.env")  # Carrega variáveis do .env se existir
+
+AUTH_USER = os.environ.get("SYSTRACK_USER")
+AUTH_PASS = os.environ.get("SYSTRACK_PASS")
+@app.before_request
+def require_auth():
+    if not (AUTH_USER and AUTH_PASS):
+        return None  # sem variáveis definidas, nada muda
+    a = request.authorization
+    if not (a and hmac.compare_digest(a.username, AUTH_USER)
+            and hmac.compare_digest(a.password, AUTH_PASS)):
+        return Response("Autenticação necessária", 401,
+                        {"WWW-Authenticate": 'Basic realm="SysTrack"'})
+        
+
+
 # ─── Configurações ────────────────────────────────────────────────────────────
-MAX_HISTORY = 60  # pontos de histórico mantidos em memória (1 por segundo)
-UPDATE_INTERVAL = 2  # segundos entre cada coleta de métricas
+MAX_HISTORY = 60        # pontos de histórico mantidos em memória (1 por segundo)
+UPDATE_INTERVAL = 2     # segundos entre cada coleta de métricas (SSE)
+DB_INTERVAL = 10        # segundos entre cada gravação no banco
+DB_RETENTION_DAYS = 90  # dias de retenção do histórico persistente
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metrics.db")
 
 # ─── Armazenamento de histórico em memória ────────────────────────────────────
 history_lock = Lock()
@@ -35,6 +59,84 @@ history = {
 # Valores anteriores para calcular delta de rede
 _prev_net = psutil.net_io_counters()
 _prev_net_time = time.time()
+
+
+# ─── Banco de dados SQLite ────────────────────────────────────────────────────
+
+def db_connect():
+    """Retorna uma conexão com o banco SQLite (thread-safe)."""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def db_init():
+    """Cria a tabela de métricas se não existir."""
+    with db_connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS metrics (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts        TEXT NOT NULL,
+                cpu       REAL NOT NULL,
+                memory    REAL NOT NULL,
+                net_sent  REAL NOT NULL,
+                net_recv  REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics (ts)")
+        conn.commit()
+
+
+def db_insert(ts, cpu, memory, net_sent, net_recv):
+    """Insere um ponto de métricas no banco."""
+    with db_connect() as conn:
+        conn.execute(
+            "INSERT INTO metrics (ts, cpu, memory, net_sent, net_recv) VALUES (?,?,?,?,?)",
+            (ts, cpu, memory, net_sent, net_recv)
+        )
+        conn.commit()
+
+
+def db_cleanup():
+    """Remove registros mais antigos que DB_RETENTION_DAYS."""
+    cutoff = (datetime.now() - timedelta(days=DB_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    with db_connect() as conn:
+        conn.execute("DELETE FROM metrics WHERE ts < ?", (cutoff,))
+        conn.commit()
+
+
+def db_persistence_worker():
+    """
+    Thread de persistência: grava um ponto a cada DB_INTERVAL segundos
+    e roda a limpeza uma vez por dia.
+    Usa lock de arquivo para evitar escrita duplicada com múltiplos workers gunicorn.
+    """
+    import fcntl
+    lock_path = DB_PATH + ".lock"
+    last_cleanup = datetime.now()
+
+    try:
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        # Outro worker já tem o lock — esta thread encerra silenciosamente
+        return
+
+    while True:
+        time.sleep(DB_INTERVAL)
+        try:
+            cpu = get_cpu_metrics()
+            mem = get_memory_metrics()
+            net = get_network_metrics()
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            db_insert(ts, cpu["percent"], mem["ram_percent"], net["sent_speed_kb"], net["recv_speed_kb"])
+
+            # Limpeza diária
+            if (datetime.now() - last_cleanup).total_seconds() >= 86400:
+                db_cleanup()
+                last_cleanup = datetime.now()
+        except Exception:
+            pass
 
 
 # ─── Funções de coleta de métricas ────────────────────────────────────────────
@@ -148,6 +250,8 @@ def get_disk_metrics():
     """Retorna métricas de disco para cada partição montada."""
     partitions = []
     for part in psutil.disk_partitions(all=False):
+        if part.fstype in ("squashfs", "tmpfs", "devtmpfs"):
+            continue
         try:
             usage = psutil.disk_usage(part.mountpoint)
             partitions.append({
@@ -454,6 +558,47 @@ def api_alerts():
     return jsonify({"alerts": alerts, "count": len(alerts)})
 
 
+@app.route("/api/history/range")
+def api_history_range():
+    """
+    Retorna histórico persistente do banco SQLite.
+    Parâmetros:
+      from  - início (ISO: YYYY-MM-DD HH:MM:SS ou YYYY-MM-DD)
+      to    - fim (mesmo formato; padrão: agora)
+      limit - máximo de pontos retornados (padrão: 1440)
+    """
+    from_str = request.args.get("from")
+    to_str = request.args.get("to", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    limit = min(int(request.args.get("limit", 1440)), 10000)
+
+    if not from_str:
+        # Padrão: últimas 24h
+        from_str = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+
+    with db_connect() as conn:
+        rows = conn.execute(
+            "SELECT ts, cpu, memory, net_sent, net_recv FROM metrics "
+            "WHERE ts BETWEEN ? AND ? ORDER BY ts ASC LIMIT ?",
+            (from_str, to_str, limit)
+        ).fetchall()
+
+    return jsonify({
+        "from": from_str,
+        "to": to_str,
+        "count": len(rows),
+        "data": [
+            {
+                "ts": r["ts"],
+                "cpu": r["cpu"],
+                "memory": r["memory"],
+                "net_sent": r["net_sent"],
+                "net_recv": r["net_recv"],
+            }
+            for r in rows
+        ]
+    })
+
+
 @app.route("/stream")
 def stream():
     """
@@ -490,6 +635,11 @@ def stream():
 
 # ─── Inicialização ────────────────────────────────────────────────────────────
 
+# Inicializa banco e thread de persistência — roda tanto com gunicorn quanto dev server
+db_init()
+_persistence_thread = Thread(target=db_persistence_worker, daemon=True)
+_persistence_thread.start()
+
 if __name__ == "__main__":
     print("=" * 60)
     print("  SysTrack - Sistema de Monitoramento de Servidores")
@@ -498,3 +648,4 @@ if __name__ == "__main__":
     # Pré-aquece o psutil para leituras de CPU mais precisas
     psutil.cpu_percent(interval=1)
     app.run(host="0.0.0.0", port=9090, debug=False, threaded=True)
+
