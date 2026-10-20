@@ -62,7 +62,7 @@ Para testar o SysTrack rapidamente sem instalá-lo como um serviço permanente n
 
 3.  O script instalará as dependências (Flask, psutil, Gunicorn) se não estiverem presentes e iniciará o servidor na porta `9090`.
 
-4.  Acesse a interface no seu navegador:
+4.  Acesse a interface no seu navegador (Acesse o arquivo systrack.env para ver credenciais de autenticação):
     **[http://SEU_IP_DO_SERVIDOR:9090](http://localhost:9090)**
 
 5.  Para parar o servidor, pressione `Ctrl+C` no terminal.
